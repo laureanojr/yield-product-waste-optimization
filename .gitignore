@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+data/processed/*
+data/cleaned/*
+!data/processed/.gitkeep
+!data/cleaned/.gitkeep
+*.env
+credentials.json
