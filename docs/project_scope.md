@@ -64,7 +64,7 @@ The dataset contains:
 - Quantity sold
 - Unit price
 
-After cleaning, the dataset contains roughly 232,710 valid sales records across ~149 unique products. *(Exact figures verified during the data cleaning phase.)*
+After cleaning, the dataset contains 232,679 valid sales records across 147 unique products, representing €562,717 in total revenue. *(Exact figures verified during the data cleaning phase.)*
 
 ### Production Data (synthetic)
 
