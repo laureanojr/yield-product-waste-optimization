@@ -2,6 +2,9 @@
 
 **An end-to-end data analytics project turning two years of real bakery sales into production-planning insight, built by a working baker moving into data.**
 
+> **Status:** Phase 1 complete — Sales & Demand Analysis (this repo).
+> Phase 2 planned — Production, Waste & Yield Simulation.
+
 🔗 **[Live dashboard →](https://datastudio.google.com/reporting/bde95bb5-686c-4339-b187-8d770afe2693)**
 
 ![Executive dashboard](dashboard/screenshots/dashboard_overview.png)
