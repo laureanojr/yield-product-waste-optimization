@@ -1,0 +1,6 @@
+# Don't let huge notebook JSON dominate the language bar
+*.ipynb linguist-documentation
+
+# Make sure SQL and Python are counted
+*.sql linguist-detectable=true
+*.py linguist-detectable=true
