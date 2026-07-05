@@ -85,4 +85,4 @@ pip install -r requirements.txt
 
 Journeyman baker moving into data analytics, based in the Hamburg area. I combine nine years in industrial food manufacturing with a B.Sc. in Business Administration and a data analytics bootcamp, and I use the production floor as the lens for my analytics work.
 
-📫 [LinkedIn] · [Email]
+📫 [LinkedIn](https://www.linkedin.com/in/laureanojr-cantor) · [Email](mailto:laureano@jrcantor.de)
