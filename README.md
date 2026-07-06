@@ -1,4 +1,5 @@
-# Bakery Sales & Demand Analysis
+# Yield & Production Waste Optimization
+### Phase 1 — Bakery Sales & Demand Analysis
 
 **An end-to-end data analytics project turning two years of real bakery sales into production-planning insight, built by a working baker moving into data.**
 
