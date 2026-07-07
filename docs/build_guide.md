@@ -60,7 +60,7 @@ Numbers in a notebook are for me. A dashboard is for everyone else. I'll connect
 
 Last comes the part that actually gets read. A one-page summary of what I asked, what I found and what it means. Recommendations that turn the findings into something a bakery could act on, like prioritising baguette availability, protecting the higher-value sandwiches, and scaling up for weekends and summer. Then I'll finish the README with the real numbers and the dashboard link, push it all, and put it on my CV and LinkedIn. A project nobody sees doesn't help my job search.
 
-## Phase 7 — The production simulation (later)
+## The production simulation — v2 (later)
 
 Once the real-data project is finished and shared, I'll add the synthetic manufacturing layer: simulated production batches, waste, quality checks and machine logs, modelled in SQL with its own dashboard pages. This is where I show I can handle production and waste analysis end to end. And I'll keep saying it plainly, it's a simulation to demonstrate the method, not a set of real findings.
 

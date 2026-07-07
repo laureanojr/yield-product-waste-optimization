@@ -1,10 +1,10 @@
 # Yield & Production Waste Optimization
-### Phase 1 — Bakery Sales & Demand Analysis
+### v1 — Bakery Sales & Demand Analysis
 
 **An end-to-end data analytics project turning two years of real bakery sales into production-planning insight, built by a working baker moving into data.**
 
-> **Status:** Phase 1 complete — Sales & Demand Analysis (this repo).
-> Phase 2 planned — Production, Waste & Yield Simulation.
+> **Status:** v1 complete — Sales & Demand Analysis (this repo).
+> v2 planned — Production, Waste & Yield Simulation.
 
 🔗 **[Live dashboard →](https://datastudio.google.com/reporting/bde95bb5-686c-4339-b187-8d770afe2693)**
 
