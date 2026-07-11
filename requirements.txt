@@ -3,3 +3,4 @@ numpy
 matplotlib
 plotly
 jupyterlab
+google-cloud-bigquery
