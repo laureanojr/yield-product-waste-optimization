@@ -168,6 +168,13 @@ class Reasons:
     def from_config(cls, cfg: dict) -> "Reasons":
         rc = cfg["downtime"]["reason_codes"]
         labels = {k: v["label"] for k, v in rc.items()}
+
+        # The micro-stop code is NOT in the failure draw. It has its own process
+        # and its own code, so it never gets sampled as an ordinary breakdown.
+        micro = cfg["downtime"].get("micro_stops", {})
+        if micro.get("enabled"):
+            labels[micro["true_reason_code"]] = micro["true_reason_label"]
+
         failure_codes = [k for k in rc if k != "01"]
         w = np.array([rc[k]["weight"] for k in failure_codes], dtype=float)
         return cls(
@@ -204,6 +211,7 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
     prod = products.set_index("product_name").to_dict("index")
 
     mis = cfg["downtime"]["miscoding"]
+    unlogged_below = cfg["downtime"]["unlogged_below_minutes"]
     perf_spec = cfg["performance"]["achieved_rate_fraction"]
     scrap_spec = cfg["scrap"]["base_rate"]
     scrap_mult = cfg["scrap"]["category_multiplier"]
@@ -294,11 +302,30 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                 dur = draw_truncated(rng, reasons.durations[code])
                 batch_downtime.append((str(code), dur))
 
+            # -- Micro-stops: modelled explicitly, never logged -----------------
+            # A tray catches, a door needs reseating, someone opens a damper.
+            # Thirty seconds to two minutes, constantly, and NOBODY enters them
+            # on the terminal. They are their own process, not a by-product of
+            # some other rule — the failure draws above cannot produce a stop
+            # this short, so without this block the "unlogged" mechanism would be
+            # dead code, and any unaccounted time in the output would be an
+            # artefact rather than a phenomenon.
+            micro = cfg["downtime"].get("micro_stops", {})
+            if micro.get("enabled"):
+                n_micro = rng.poisson(micro["rate_per_hour"] * (planned_minutes / 60.0))
+                for _ in range(n_micro):
+                    dur = draw_truncated(rng, micro["duration_minutes"])
+                    batch_downtime.append((micro["true_reason_code"], dur))
+
             total_stop = sum(d for _, d in batch_downtime)
 
-            # A batch cannot spend most of its window broken. If the draws pile
-            # up, scale them back rather than producing a negative run time.
-            cap = 0.6 * planned_minutes
+            # GUARDRAIL, NOT A MODEL. A batch cannot spend most of its window
+            # broken. This exists so the draws can never produce a negative run
+            # time — it is not supposed to shape the output. Set high on purpose:
+            # if this cap ever binds often enough to matter, the failure and
+            # micro-stop rates are wrong and should be fixed there, not clipped
+            # here.
+            cap = 0.85 * planned_minutes
             if total_stop > cap and total_stop > 0:
                 k = cap / total_stop
                 batch_downtime = [(c, d * k) for c, d in batch_downtime]
@@ -345,6 +372,10 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
             ))
 
             # -- Downtime rows, and THE PATHOLOGY ------------------------------
+            # Shuffle so micro-stops interleave with the larger stops rather than
+            # all landing at the end of the batch.
+            batch_downtime = [batch_downtime[i]
+                              for i in rng.permutation(len(batch_downtime))]
             offset = 0.0
             for i, (true_code, dur) in enumerate(batch_downtime):
                 ds = start + pd.Timedelta(minutes=offset)
@@ -359,7 +390,7 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                 # all the time the machine wasn't running, and from inside real
                 # data you cannot see the gap. This is the harder half of the
                 # pathology and the one that flatters Availability.
-                was_logged = dur >= mis["unlogged_below_minutes"]
+                was_logged = dur >= unlogged_below
 
                 # (b) SHORT STOPS GET MISCODED TO 'OTHER'.
                 # "Other" is the fastest button on the terminal, and the operator

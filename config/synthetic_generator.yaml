@@ -219,17 +219,45 @@ downtime:
     catchall_label: "Other"
 
     # Short stops are miscoded far more often than long ones. Nobody fills in a
-    # form properly for a four-minute stop.
+    # form carefully for a four-minute stop, and "Other" is the fastest button.
     probability_by_duration:
       under_10_min: 0.55
       under_30_min: 0.30
       over_30_min:  0.05
 
-    # Micro-stops below this threshold are never logged at all. This silently
-    # INFLATES Availability, which is the second half of the pathology and the
-    # harder one to spot.
-    unlogged_below_minutes: 3
 
+  # -- MICRO-STOPS: the second half of the pathology ---------------------------
+  # A tray catches. A door needs reseating. Someone opens a damper. These last
+  # thirty seconds to two minutes, they happen constantly, and NOBODY EVER
+  # ENTERS THEM ON THE TERMINAL. They are not in any downtime report, anywhere.
+  #
+  # They are modelled as their own high-frequency, short-duration process —
+  # NOT as a by-product of some other rule. The failure draws above cannot
+  # produce a stop this short, so if micro-stops were not modelled explicitly,
+  # the "unlogged" mechanism would be dead code.
+  #
+  # WHY THIS MATTERS: unlogged stops mean the operator log does not account for
+  # all the time the machine was down. Availability computed from the log looks
+  # BETTER than the line really is, and from inside real data you cannot see the
+  # gap. This is the harder pathology — the miscoding one at least leaves a
+  # suspicious 'Other' bucket behind. This one leaves nothing.
+  #
+  # v_dq_unaccounted_time is the check that catches it, and it is a check an
+  # analyst CAN run in a real plant: machine counters versus the operator log.
+  micro_stops:
+    enabled: true
+    rate_per_hour: 1.8                                # frequent, by nature
+    duration_minutes: {mean: 1.2, std: 0.5, min: 0.3, max: 2.9}
+    # Its OWN code, not lumped in with real mechanical failures. In the output
+    # this code has real stop hours and ZERO reported hours — not one of them
+    # ever reaches a terminal. That is the cleanest possible statement of the
+    # problem, and it is why v_dq_reason_coding is worth building.
+    true_reason_code: "06"
+    true_reason_label: "Micro-stop (never logged)"
+    always_unlogged: true
+
+  # Below this, a stop never makes it onto the terminal at all.
+  unlogged_below_minutes: 3
 
 quality:
   # fact_quality_inspection — sampled, not census. A real line inspects a
