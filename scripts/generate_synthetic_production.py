@@ -48,9 +48,7 @@ CONFIG_PATH = ROOT / "config" / "synthetic_generator.yaml"
 OUT_DIR = ROOT / "data" / "synthetic"
 
 
-# =============================================================================
-# Load inputs
-# =============================================================================
+# --- Load inputs ---
 
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
@@ -102,9 +100,7 @@ def load_real_demand(client, products: pd.DataFrame) -> pd.DataFrame:
     """).to_dataframe()
 
 
-# =============================================================================
-# Demand -> plant demand
-# =============================================================================
+# --- Demand -> plant demand ---
 
 def build_plant_demand(demand: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Turn one shop's sales into the plant's daily production requirement.
@@ -143,25 +139,20 @@ def build_plant_demand(demand: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return d
 
 
-# =============================================================================
-# Batch construction
-# =============================================================================
+# --- Batch construction ---
 
 @dataclass
 class Reasons:
     """Downtime reason codes.
 
-    CHANGEOVER (01) IS DETERMINISTIC, NOT DRAWN.
-    A changeover happens on every product switch, because we sequence products
-    one after another on a shared oven. It is not a random failure and must not
-    be sampled like one. The random-failure draw therefore uses codes 02-05 with
-    their weights renormalised.
+    Changeover (01) is deterministic — one per product switch — so it isn't in the
+    random-failure draw. Codes 02-05 are, with weights renormalised.
 
-    Code 01 is the changeover BETWEEN products — cleaning down, moving the oven
+    Code 01 is the changeover between products: cleaning down, moving the oven
     temperature, swapping formats. It is NOT the routine load/unload handling,
-    which already sits inside the cycle time that defines the ideal rate. Count
-    handling as downtime as well and you penalise it twice: once in Performance,
-    once in Availability.
+    which already sits inside the cycle time behind the ideal rate. Logging that
+    as downtime too would penalise it twice — once in Performance, once in
+    Availability.
     """
     codes: list[str]
     labels: dict[str, str]
@@ -202,9 +193,7 @@ def batch_id(date, product_id: int, seq: int) -> str:
     return "B" + hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
-# =============================================================================
-# The generator
-# =============================================================================
+# --- The generator ---
 
 def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
              plant_demand: pd.DataFrame):
@@ -242,11 +231,9 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
         day = day.copy()
         day["units"] = day["units"] + day["product_name"].map(carry).fillna(0)
 
-        # Dispatch: volume descending. Not an optimiser — the generator is
-        # producing plausible history, not solving a scheduling problem. The
-        # volume driver leads the shift and the specialty items follow, because
-        # that is how the shift actually runs. FIFO does not apply: there is no
-        # queue of arriving orders, the day's demand is known at the start.
+        # Volume descending. Not an optimiser — this is plausible history, not a
+        # scheduling problem. The volume driver leads and the specialty items
+        # follow, which is how a shift actually runs.
         day = day.sort_values("units", ascending=False)
 
         # Each machine has its own clock. Deck, rack and bench run in parallel.
@@ -290,31 +277,27 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
             seq += 1
             bid = batch_id(date, int(p["product_id"]), seq)
 
-            # -- Changeover: deterministic, on every product switch ------------
+            # Changeover on every product switch.
             batch_downtime = []
             if last_product[mid] is not None and last_product[mid] != name:
                 dur = draw_truncated(rng, reasons.durations["01"])
                 batch_downtime.append(("01", dur))
             last_product[mid] = name
 
-            # -- Random failures: Poisson on the machine's base failure rate ---
-            # This is the ONLY channel from equipment to data. The 2012 deck oven
-            # breaks more often than the 2019 rack oven because dim_machine says
-            # it does, and for no other reason.
+            # Unplanned breakdowns: Poisson on the machine's base failure rate.
+            # The 2012 deck oven breaks more often than the 2019 rack. Note this
+            # is NOT what drives the Availability gap in the output — changeover
+            # frequency is, and by a long way.
             lam = float(m["base_failure_rate_per_hr"]) * (planned_minutes / 60.0)
             for _ in range(rng.poisson(lam)):
                 code = rng.choice(reasons.failure_codes, p=reasons.weights)
                 dur = draw_truncated(rng, reasons.durations[code])
                 batch_downtime.append((str(code), dur))
 
-            # -- Micro-stops: modelled explicitly, never logged -----------------
-            # A tray catches, a door needs reseating, someone opens a damper.
-            # Thirty seconds to two minutes, constantly, and NOBODY enters them
-            # on the terminal. They are their own process, not a by-product of
-            # some other rule — the failure draws above cannot produce a stop
-            # this short, so without this block the "unlogged" mechanism would be
-            # dead code, and any unaccounted time in the output would be an
-            # artefact rather than a phenomenon.
+            # Micro-stops: a tray catches, a door needs reseating. Thirty seconds
+            # to two minutes, constantly, and nobody enters them on the terminal.
+            # Their own process — the failure draws above can't produce a stop this
+            # short, so without this the "unlogged" mechanism would be dead code.
             micro = cfg["downtime"].get("micro_stops", {})
             if micro.get("enabled"):
                 n_micro = rng.poisson(micro["rate_per_hour"] * (planned_minutes / 60.0))
@@ -338,15 +321,11 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
 
             run_minutes = planned_minutes - total_stop
 
-            # -- Output --------------------------------------------------------
-            achieved = draw_truncated(rng, perf_spec)   # strictly < 1.0 by config
+            achieved = draw_truncated(rng, perf_spec)   # < 1.0 by config
 
-            # FLOOR, not round. Rounding UP a small batch pushes output above
-            # what the run time could theoretically produce, and OEE Performance
-            # breaks 100%. You cannot bake nine tenths of a baguette. Truncating
-            # guarantees actual output stays under the theoretical ceiling, which
-            # is what keeps the OEE decomposition honest. The post-generation
-            # assertion below exists because this bug is easy to reintroduce.
+            # Floor, not round. Rounding up a small batch pushes output above what
+            # the run time could theoretically produce and Performance breaks
+            # 100%. You can't bake nine tenths of a baguette.
             total_units = int(math.floor(run_minutes / 60.0 * ideal_rate * achieved))
             if total_units < 1:
                 continue
@@ -376,7 +355,6 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                 scrap_units=scrap_units,
             ))
 
-            # -- Downtime rows, and THE PATHOLOGY ------------------------------
             # Shuffle so micro-stops interleave with the larger stops rather than
             # all landing at the end of the batch.
             batch_downtime = [batch_downtime[i]
@@ -387,22 +365,12 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                 offset += dur
                 de = ds + pd.Timedelta(minutes=dur)
 
-                # (a) MICRO-STOPS ARE NEVER LOGGED.
-                # Below the threshold, the stop simply never makes it onto the
-                # terminal. Nobody fills in a form for a two-minute stop. These
-                # rows are invisible to the KPI views — which is the point.
-                # Unlogged stops mean the logged downtime does not account for
-                # all the time the machine wasn't running, and from inside real
-                # data you cannot see the gap. This is the harder half of the
-                # pathology and the one that flatters Availability.
+                # Below the threshold, the stop never reaches the terminal.
+                # Nobody fills in a form for a two-minute stop.
                 was_logged = dur >= unlogged_below
 
-                # (b) SHORT STOPS GET MISCODED TO 'OTHER'.
-                # "Other" is the fastest button on the terminal, and the operator
-                # has dough on their hands. Short stops get miscoded far more
-                # often than long ones. The result is a downtime Pareto with a
-                # catch-all at the top — useless for prioritising maintenance
-                # until somebody fixes the reason coding.
+                # Short stops get miscoded to "Other" far more often than long
+                # ones — fastest button, and the operator has dough on their hands.
                 if dur < 10:
                     p_mis = mis["probability_by_duration"]["under_10_min"]
                 elif dur < 30:
@@ -432,7 +400,7 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                     was_logged=bool(was_logged),
                 ))
 
-            # -- Inspection: sampled, not census -------------------------------
+            # Sampled inspection, not census.
             if rng.random() < insp_rate:
                 sample = min(50, max(5, total_units // 20))
                 defects = int(rng.binomial(sample, min(sr, 0.5)))
@@ -456,9 +424,10 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
             pd.DataFrame(inspections))
 
 
-# =============================================================================
-# Post-generation assertions — fail loudly before anything is written
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Checks that run before anything is written. These can fail; the Performance one
+# did, during the build.
+# ---------------------------------------------------------------------------
 
 def validate(batches: pd.DataFrame, downtimes: pd.DataFrame, products: pd.DataFrame):
     p = products.set_index("product_id")["ideal_units_per_hr"]
@@ -467,10 +436,9 @@ def validate(batches: pd.DataFrame, downtimes: pd.DataFrame, products: pd.DataFr
     hours = batches["run_time_minutes"] / 60.0
     perf = (total / hours) / batches["product_id"].map(p)
 
-    # THE assertion. If Performance can exceed 1.0, the plant is producing faster
-    # than its own theoretical maximum, OEE stops reconciling, and every number
-    # downstream is nonsense.
-    assert perf.max() <= 1.0, f"OEE Performance exceeded 1.0 (max {perf.max():.4f})"
+    # A plant can't produce faster than its own theoretical maximum. This caught a
+    # real bug during the build: rounding up small batches.
+    assert perf.max() <= 1.0, f"Performance exceeded 1.0 (max {perf.max():.4f})"
 
     assert (batches["run_time_minutes"] > 0).all(), "non-positive run time"
     assert (batches["run_time_minutes"] <= batches["planned_production_minutes"] + 1e-6).all(), \

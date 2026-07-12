@@ -1,34 +1,13 @@
--- =============================================================================
--- duckdb_views.sql — KPI views
+-- KPI views. All metrics derive here; the fact tables hold raw events only.
 --
--- OEE IS COMPUTED ON A TIME BASIS, NOT A UNIT BASIS.
---
--- Products on this line run from 33.75 units/hr (campagne) to 1,728 units/hr
--- (cookie). Summing units across them to roll up OEE would be nonsense — a
--- cookie and a country loaf are not comparable units, and the cookie would
--- swamp everything.
---
--- So each batch converts its output into EARNED HOURS: units / ideal rate, the
--- time it SHOULD have taken. Then
---
---     Availability = run hours       / planned hours
---     Performance  = earned hours    / run hours
---     Quality      = good earned hrs / earned hours
---     OEE          = good earned hrs / planned hours
---
--- and A x P x Q = OEE EXACTLY, at every level of aggregation. A naive unit-based
--- rollup does not reconcile once products have different rates. This is why the
--- validation suite can ASSERT the identity rather than hope it roughly holds.
---
--- WHAT THE VIEWS ARE ALLOWED TO SEE
--- KPI views read ONLY reported_reason_code, and ONLY rows where was_logged —
--- because that is all a real analyst would ever have. true_reason_code and the
--- unlogged rows exist for the two v_dq_* views alone: they are the ruler, not
--- the data.
--- =============================================================================
+-- OEE is computed on a time basis. Products run from 34 to 1,728 units/hr, so
+-- summing units across them to roll up OEE would be meaningless. Each batch
+-- converts its output into "earned hours" (units / ideal rate) instead.
 
 CREATE OR REPLACE VIEW v_batch_oee AS
 WITH logged_stops AS (
+  -- was_logged only: micro-stops never reach a terminal, so an analyst working
+  -- from the operator log can't see them either.
   SELECT batch_id,
          SUM(duration_minutes) AS logged_stop_minutes,
          COUNT(*)              AS logged_stop_events
@@ -58,6 +37,10 @@ SELECT
   (b.good_units + b.scrap_units) / p.ideal_units_per_hr     AS earned_hours,
   b.good_units / p.ideal_units_per_hr                       AS good_earned_hours,
 
+  -- Availability uses run_time_minutes, the machine's own counter — NOT the
+  -- operator log. So the OEE reported by this project is not distorted by the
+  -- unlogged micro-stops. v_dq_unaccounted_time shows what it would look like
+  -- if it were.
   b.run_time_minutes / NULLIF(b.planned_production_minutes, 0)              AS availability,
   ((b.good_units + b.scrap_units) / p.ideal_units_per_hr)
       / NULLIF(b.run_time_minutes / 60.0, 0)                                AS performance,
@@ -65,9 +48,9 @@ SELECT
   (b.good_units / p.ideal_units_per_hr)
       / NULLIF(b.planned_production_minutes / 60.0, 0)                      AS oee,
 
-  -- Scrap at full standard cost. SIMPLIFICATION: a real plant charges scrap at
-  -- cost accumulated to the point of rejection — dough dumped at proofing is
-  -- cheap, a loaf pulled after the bake carries the full oven. One stage here.
+  -- Full standard cost, all scrap valued the same regardless of when it was
+  -- rejected. Real plants charge scrap at cost accumulated to that point. The
+  -- cost ratios are fabricated, so this column supports no conclusion.
   b.scrap_units * p.unit_cost_eur                           AS scrap_cost_eur
 
 FROM fact_production_batch b
@@ -97,6 +80,8 @@ FROM v_batch_oee
 GROUP BY production_date, machine_id, machine_name;
 
 
+-- Scrap rate and scrap cost rank differently. Which one a plant chases is a
+-- business call.
 CREATE OR REPLACE VIEW v_scrap_by_product AS
 SELECT
   product_id,
@@ -108,57 +93,51 @@ SELECT
   SUM(scrap_units) AS scrap_units,
   ROUND(SUM(scrap_units)    / NULLIF(SUM(total_units), 0), 4) AS scrap_rate,
   ROUND(SUM(scrap_cost_eur), 2)                               AS scrap_cost_eur,
-  -- Scrap RATE and scrap COST rank differently, and that gap is the whole point
-  -- of costing scrap. A high-rate cheap product can matter less than a low-rate
-  -- expensive one. Which one a plant chases is a business decision.
   ROUND(SUM(scrap_cost_eur) / NULLIF(SUM(total_units), 0), 4) AS scrap_cost_per_unit
 FROM v_batch_oee
 GROUP BY product_id, product_name, product_category, machine_name;
 
 
--- WHAT A REAL ANALYST WOULD SEE. Reported codes, logged rows, no access to the
--- truth. This is the view you would actually build in a plant — and it is the
--- one that fails.
+-- The downtime report a plant would actually have: reported codes, logged rows.
+-- This is the view that's wrong, and v_dq_reason_coding shows by how much.
 CREATE OR REPLACE VIEW v_downtime_pareto AS
 SELECT
   d.machine_id,
   m.machine_name,
   d.reported_reason_code  AS reason_code,
   d.reported_reason_label AS reason_label,
-  COUNT(*)                               AS events,
+  COUNT(*)                                 AS events,
   ROUND(SUM(d.duration_minutes) / 60.0, 2) AS stop_hours,
   ROUND(SUM(d.duration_minutes)
         / SUM(SUM(d.duration_minutes)) OVER (PARTITION BY d.machine_id), 4)
-                                         AS share_of_machine_stop_time
+                                           AS share_of_machine_stop_time
 FROM fact_downtime d
 JOIN dim_machine m USING (machine_id)
 WHERE d.was_logged
 GROUP BY d.machine_id, m.machine_name, d.reported_reason_code, d.reported_reason_label;
 
 
--- THE PATHOLOGY, MEASURED.
+-- Reported reason codes against what actually caused each stop.
 --
--- THIS VIEW CANNOT EXIST IN A REAL PLANT. There is one reason code and no record
--- of what it should have been — which is precisely why the problem is invisible
--- from inside real data, and why an analyst has to reason about it rather than
--- query it.
---
--- Here the generator knows the truth, so the distortion can be MEASURED instead
--- of asserted. That is what the synthetic layer is FOR.
+-- This view can't be built in a real plant: there is one reason code and no
+-- record of what it should have been. It works here only because the data is
+-- synthetic. The distortion it measures is real in its effect though —
+-- v_downtime_pareto reads the same reported codes, so the Pareto a maintenance
+-- team would prioritise off is genuinely misleading.
 CREATE OR REPLACE VIEW v_dq_reason_coding AS
 WITH reported AS (
   SELECT reported_reason_code AS code, SUM(duration_minutes) AS reported_minutes
-  FROM fact_downtime WHERE was_logged          -- what the analyst can see
+  FROM fact_downtime WHERE was_logged
   GROUP BY code
 ),
 truth AS (
   SELECT true_reason_code AS code, SUM(duration_minutes) AS true_minutes
-  FROM fact_downtime                            -- everything, logged or not
+  FROM fact_downtime
   GROUP BY code
 ),
 totals AS (
-  SELECT (SELECT SUM(true_minutes) FROM truth)         AS t_all,
-         (SELECT SUM(reported_minutes) FROM reported)  AS r_all
+  SELECT (SELECT SUM(true_minutes) FROM truth)        AS t_all,
+         (SELECT SUM(reported_minutes) FROM reported) AS r_all
 )
 SELECT
   COALESCE(t.code, r.code) AS reason_code,
@@ -166,10 +145,7 @@ SELECT
   ROUND(COALESCE(r.reported_minutes, 0) / 60.0, 1) AS reported_stop_hours,
   ROUND(t.true_minutes     / totals.t_all, 4)      AS true_share,
   ROUND(r.reported_minutes / totals.r_all, 4)      AS reported_share,
-  -- Negative = this cause is UNDERSTATED in the data a plant actually holds.
-  -- Changeover is the big loser: it is mostly short stops, and short stops are
-  -- exactly what gets dumped into the catch-all. The single biggest lever on the
-  -- line is the one its own downtime report hides.
+  -- Negative = understated in the data a plant would actually hold.
   ROUND(COALESCE(r.reported_minutes, 0) / totals.r_all
         - COALESCE(t.true_minutes, 0) / totals.t_all, 4) AS share_distortion
 FROM truth t
@@ -177,13 +153,13 @@ FULL OUTER JOIN reported r USING (code)
 CROSS JOIN totals;
 
 
--- The second half of the pathology — and unlike the view above, an analyst CAN
--- build this one in a real plant: machine counters against the operator log.
+-- Machine counter against operator log. The gap is stop time nobody recorded.
 --
--- The machine was not running for (planned - run) minutes. The operator logged
--- less than that. The gap is time nobody recorded: micro-stops too short for
--- anyone to bother entering. This is the check that catches an Availability
--- figure flattering the line. Distrust the data first.
+-- This is a CHECK, not a flaw in the numbers above. v_batch_oee already uses the
+-- machine counter, so availability_actual is what this project reports. The
+-- point of the view is that plants often have only the operator log —
+-- availability_from_log is what you would conclude if you trusted it, and the
+-- gap between the two columns is the reason to run the comparison at all.
 CREATE OR REPLACE VIEW v_dq_unaccounted_time AS
 SELECT
   machine_id,
@@ -193,7 +169,6 @@ SELECT
   ROUND(SUM(planned_hours - run_hours) - SUM(logged_stop_hours), 1) AS unaccounted_hours,
   ROUND(1 - SUM(logged_stop_hours)
             / NULLIF(SUM(planned_hours - run_hours), 0), 4)         AS unaccounted_share,
-  -- The first number is the one that ends up on the dashboard.
   ROUND((SUM(planned_hours) - SUM(logged_stop_hours))
         / NULLIF(SUM(planned_hours), 0), 4)                         AS availability_from_log,
   ROUND(SUM(run_hours) / NULLIF(SUM(planned_hours), 0), 4)          AS availability_actual

@@ -56,37 +56,31 @@ A real point-of-sale export from a French bakery, January 2021 to September 2022
 
 ## The synthetic production layer
 
-A five-table star schema — `dim_product`, `dim_machine`, `fact_production_batch`, `fact_downtime`, `fact_quality_inspection` — holding 8,770 batches, 16,029 downtime events and 2,166 quality inspections across the same 21 months of real demand.
+Till data has no production in it, so I generated some — a five-table star schema with 8,770 batches, 16,029 downtime events and 2,166 quality inspections across the same 21 months of real demand.
 
-**The generator writes raw events only.** Planned and actual quantities, run times, good and scrap units, downtime intervals, inspection outcomes. It never writes a yield percentage, a waste rate, or an OEE number. Every KPI derives in SQL, and OEE reconciles from Availability × Performance × Quality — asserted at batch grain *and* after aggregation, because naive rollups break once products have different ideal rates.
+The generator writes raw events only: quantities, run times, good and scrap units, downtime intervals. It never writes a yield %, a waste rate or an OEE number — everything derives in SQL. Production rates aren't hardcoded either; they come from six equipment numbers and a bake time per product, so changing an input recomputes every affected rate.
 
-Production rates aren't hardcoded either. They derive from six equipment numbers and a bake time per product: a three-deck oven holding 30 baguettes a deck, a rack oven with 18 trays, and the handling allowance for each. Change an input and every affected rate recomputes.
+**It produces no findings.** I wrote the data, so any pattern in it is a parameter read back. It's here to show I can build a production data model and derive OEE correctly, not to claim I analysed a plant.
 
-### Where it gets interesting
+### The part worth looking at
 
-Real production data is wrong in specific ways, and the generator reproduces two of them on purpose.
-
-Downtime reason codes get miscoded to a catch-all, because "Other" is the fastest button on the terminal. And micro-stops — a tray catches, a door needs reseating — never get logged at all.
-
-The result:
+Real production data is wrong in specific ways, and I built two of them in on purpose. Downtime reason codes get miscoded to a catch-all, because "Other" is the fastest button on the terminal. And micro-stops — a tray catches, a door needs reseating — never get logged at all.
 
 | Reason code | True share of lost time | As reported |
 |---|---|---|
-| **Changeover** | **77.5%** | 53.1% |
-| **Micro-stops** | **15.8%** | **0.0%** |
-| **"Other"** | **0.0%** | **40.0%** |
+| Changeover | 77.5% | 53.1% |
+| Micro-stops | 15.8% | **0.0%** |
+| "Other" | **0.0%** | 40.0% |
 
-The largest bucket in the plant's own downtime report corresponds to nothing that happened. The second-largest true cause of lost time appears nowhere at all — 168 hours of it, not one minute recorded. A maintenance team prioritising off that Pareto would fix the wrong thing and never learn the biggest thing existed.
+So the largest bucket in the plant's own downtime report corresponds to nothing that happened, and the second-largest true cause of lost time is invisible — 168 hours of it, unrecorded. A maintenance team prioritising off that Pareto fixes the wrong thing.
 
-It flatters Availability too: the rack oven reads **0.757** off the operator log against an actual **0.534**.
+Two data-quality views measure the gap. One of them (`v_dq_reason_coding`) couldn't exist in a real plant — you get one reason code and no record of what it should have been, which is exactly why the problem is invisible from inside real data. The other (`v_dq_unaccounted_time`) compares the machine counter against the operator log, and that check *is* runnable anywhere.
 
-**This is a finding about data quality, not about bread.** It's the argument for validating reason coding before you trust a downtime report — and it's a check an analyst can genuinely run in a real plant, comparing machine counters against the operator log.
+### What it does and doesn't show
 
-### What it does and doesn't prove
+It shows I can design an MES-style schema and derive the standard metrics from it correctly. It doesn't show I can analyse a plant — I wrote the data, so there's nothing to find.
 
-It proves I can design an MES-style schema and derive the standard metrics correctly from it. It does **not** prove I can analyse a plant — I wrote the data, so there is nothing to find. Full scope, assumptions and limitations: [`docs/synthetic_layer_scope.md`](docs/synthetic_layer_scope.md) and [`docs/synthetic_layer_assumptions.md`](docs/synthetic_layer_assumptions.md).
-
-Reproducible from a fixed seed, with a full assertion suite on both engines — [`sql/synthetic/09_validate_synthetic_layer.sql`](sql/synthetic/09_validate_synthetic_layer.sql) on BigQuery, and the same checks in [`scripts/build_duckdb.py`](scripts/build_duckdb.py) locally.
+Assumptions and limitations, stated plainly: [`docs/synthetic_layer_scope.md`](docs/synthetic_layer_scope.md).
 
 ---
 
