@@ -86,7 +86,7 @@ It flatters Availability too: the rack oven reads **0.757** off the operator log
 
 It proves I can design an MES-style schema and derive the standard metrics correctly from it. It does **not** prove I can analyse a plant — I wrote the data, so there is nothing to find. Full scope, assumptions and limitations: [`docs/synthetic_layer_scope.md`](docs/synthetic_layer_scope.md) and [`docs/synthetic_layer_assumptions.md`](docs/synthetic_layer_assumptions.md).
 
-Reproducible from a fixed seed, with a 15-assertion validation suite in [`sql/synthetic/09_validate_synthetic_layer.sql`](sql/synthetic/09_validate_synthetic_layer.sql).
+Reproducible from a fixed seed, with a full assertion suite on both engines — [`sql/synthetic/09_validate_synthetic_layer.sql`](sql/synthetic/09_validate_synthetic_layer.sql) on BigQuery, and the same checks in [`scripts/build_duckdb.py`](scripts/build_duckdb.py) locally.
 
 ---
 
@@ -96,7 +96,7 @@ The full write-up of every step and the reasoning behind it is in [`docs/build_g
 
 - **Cleaning and analysis:** Python (pandas, NumPy) in Jupyter notebooks. See [`notebooks/`](notebooks/).
 - **Data modelling:** loaded the clean data into Google BigQuery and built KPI views in SQL. See [`sql/`](sql/).
-- **Dashboard:** Google Data Studio, served from an aggregated Google Sheet rather than a live BigQuery connection — cheaper to run and it survives a billing lapse, which matters for a public portfolio link.
+- **Dashboard:** Google Data Studio, served from an aggregated Google Sheet rather than a live warehouse connection — cheap to run, and the public link survives regardless of what's happening in the cloud.
 - **Charts:** Matplotlib. See [`images/charts/`](images/charts/).
 
 ---
@@ -107,8 +107,10 @@ The full write-up of every step and the reasoning behind it is in [`docs/build_g
 ├── data/            raw + cleaned data
 ├── notebooks/       01 understanding → 03 exploratory analysis
 ├── config/          generator configuration — every fabricated number in one file
-├── sql/             BigQuery views and KPI queries
-│   └── synthetic/   synthetic production layer: schema, KPI views, validation
+├── scripts/         generator + DuckDB build (build_duckdb.py runs everything)
+├── sql/
+│   ├── synthetic/   BigQuery: schema, KPI views, 15-assertion validation
+│   └── duckdb/      the same layer, portable — no cloud account required
 ├── dashboard/       dashboard screenshots + SQL proof
 ├── images/charts/   analysis charts
 ├── docs/            project scope, hypotheses, data dictionary, build guide
@@ -119,29 +121,39 @@ The full write-up of every step and the reasoning behind it is in [`docs/build_g
 
 ## Reproduce it
 
+**No cloud account needed.** Clone, install, run — the whole thing, on a laptop, in seconds.
+
 ```bash
 git clone https://github.com/laureanojr/yield-product-waste-optimization.git
 cd yield-product-waste-optimization
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-gcloud auth application-default login
+
+python scripts/build_duckdb.py
 ```
 
-**Real layer:** run the notebooks in order, 01 → 03.
+That builds the real layer from the cleaned POS export, generates the synthetic production layer from a fixed seed, creates every KPI view, and runs 16 assertions — including that OEE reconciles from Availability × Performance × Quality.
 
-**Synthetic layer** (set the BigQuery query location to EU first):
+Then explore it:
 
 ```bash
-# 1. dimensions      sql/synthetic/05_create_dim_machine.sql
-#                    sql/synthetic/06_author_product_standards.sql
-# 2. empty facts     sql/synthetic/07_create_fact_tables.sql
-
-python scripts/generate_synthetic_production.py
-python scripts/load_synthetic_to_bigquery.py
-
-# 3. KPI views       sql/synthetic/08_create_kpi_views.sql
-# 4. validate        sql/synthetic/09_validate_synthetic_layer.sql
+duckdb bakery.duckdb
 ```
+
+```sql
+SELECT * FROM v_dq_reason_coding ORDER BY true_stop_hours DESC;
+SELECT * FROM v_dq_unaccounted_time;
+```
+
+For the real-layer analysis and charts, run the notebooks in order, 01 → 03.
+
+### Two engines, one answer
+
+The pipeline was built on BigQuery, and those scripts are still here in [`sql/synthetic/`](sql/synthetic/). They ran, and they're the record of that work.
+
+But a repo that needs a Google Cloud account is a repo nobody actually runs, and reproducibility is a standard I set for this project. So the whole thing is ported to DuckDB — and the port cross-validates the original exactly: **8,770 batches, 16,029 downtime events, identical reason-code shares to four decimal places.** Two engines, different SQL dialects, the same answer.
+
+The dashboard is unaffected either way: Data Studio serves from an aggregated Sheet, so the live link keeps working regardless of what's running underneath.
 
 ---
 
