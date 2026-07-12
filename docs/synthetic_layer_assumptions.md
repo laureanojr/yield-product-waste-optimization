@@ -26,19 +26,34 @@ The only real value carried into the synthetic layer is `dim_product.v1_total_un
 
 There is no equipment data in the source dataset. The plant below is declared, not observed.
 
-> A central production bakery supplying **ten retail outlets**. Three production resources with fixed product routing: a deck oven line (bread), a rack oven line (viennoiserie and patisserie), and a manual assembly bench (sandwich). Manual loading and unloading throughout.
+> A central production bakery supplying **two retail outlets**. Three production resources with fixed product routing: a deck oven line (bread), a rack oven line (viennoiserie and patisserie), and a manual assembly bench (sandwich). Manual loading and unloading throughout.
 
-### Why the plant supplies ten outlets
+### The scale factor is capacity-bound, not chosen
 
-The real POS series describes one retail shop: roughly 540 units a day across all 27 modelled products. A single shop does not run an OEE programme — it has a baker who knows what to bake. Anchoring an industrial metric to shop-scale demand produces ovens that stand idle and an OEE that describes emptiness rather than performance.
+The real POS series describes one retail shop: roughly 540 units a day across all 27 modelled products. A single shop does not run an OEE programme — it has a baker who knows what to bake. Anchoring an industrial metric to shop-scale demand gives you ovens standing idle and an OEE that describes emptiness rather than performance.
 
-So the generator multiplies reference outlet demand by a declared constant, `OUTLET_EQUIVALENT_FACTOR = 10`, **before production planning** — not after generation. The demand *mix* and *seasonality* still come from the real dataset; only the *scale* is fabricated.
+So the generator multiplies reference outlet demand by a declared constant, `OUTLET_EQUIVALENT_FACTOR`, **before production planning** — never by inflating generated data afterwards. The demand *mix* and *seasonality* stay real; only the *scale* is fabricated.
 
-Ten is a judgement, not a calculation. It produces a plant with a few thousand units a day and several hours of daily oven time, which is a plant where OEE is a metric someone would plausibly track. That is the entire justification and it is not dressed up as more.
+The value is **2**, and it comes from arithmetic rather than taste. A capacity check against the equipment basis gives deck-oven load per production day:
+
+| Factor | Deck hours/day | Rack hours/day | |
+|---|---|---|---|
+| 1 | 3.0 | 0.2 | plant is idle most of the shift |
+| **2** | **6.0** | **0.4** | **fits a 10-hour shift with margin** |
+| 3 | 9.0 | 0.6 | no room for changeovers |
+| 10 | 30.1 | 1.9 | impossible |
+
+The deck oven *is* the plant: bread is ~90% of volume, and a deck load is 90 units against the rack's 288. At factor 2 the deck runs about 6 hours of a 10-hour shift — a real bottleneck with real margin, which is what makes downtime and scrap mean anything. Push it higher and the plant fails to bake its own demand every single day for 600 days, and OEE becomes noise about a facility that was never viable.
+
+**A capacity violation here would not be a finding.** I chose the factor and I chose the oven. "Discovering" the bottleneck would be arithmetic on my own assumptions, handed back to me.
 
 ### Operating calendar
 
-The plant runs **Monday to Saturday**, closed Sundays, on its own schedule. It does not inherit the retail shop's Wednesday closure — a production bakery supplying ten outlets has no reason to share one shop's opening hours.
+The plant runs **Monday to Saturday**, closed Sundays, on its own schedule. It does not inherit the retail shop's Wednesday closure — a production bakery supplying several outlets has no reason to share one shop's opening hours.
+
+Sunday is the shop's biggest day, and the plant is shut, so **Sunday demand rolls into Saturday** — which is exactly why Saturday is a monster shift in a real bakery. No demand is invented and none is thrown away.
+
+The shift is **02:00–12:00**: ten hours, not eight. The deck oven needs roughly 6 hours of bake time at this scale, and the remaining 4 carry changeovers and downtime. An 8-hour window would not fit the plant.
 
 ---
 
@@ -130,17 +145,54 @@ Derived as: real median observed selling price × a fabricated category cost rat
 
 ---
 
-## The MES pathology (deliberate)
+## The MES pathologies (deliberate)
 
-Real production data is systematically wrong in a particular way, and the generator reproduces it on purpose.
+Real production data is systematically wrong in specific, knowable ways. The generator reproduces two of them on purpose.
 
-**Downtime reason codes get miscoded to the catch-all.** The terminal offers a list of reasons; "Other" is the fastest button; a meaningful share of events that were really changeovers or short stops end up there. The generator writes the *true* reason, then miscodes a declared proportion to `OTHER`.
+### 1. The catch-all reason code
 
-A data-quality view surfaces the result: `OTHER` is the single largest downtime bucket, which makes the downtime Pareto unusable as a maintenance-prioritisation tool until the reason coding is fixed.
+The terminal offers a list of downtime reasons. "Other" is the fastest button. An operator with dough on their hands picks the quickest option, not the accurate one — and short stops get miscoded far more often than long ones.
 
-This is a finding about **data quality**, not about bread. It violates no rule — it demonstrates that an analyst knows where operational data goes wrong and checks before trusting it. *Distrust the data first.*
+The generator writes the *true* reason to `true_reason_code`, then miscodes a share of them to `99 / OTHER` in `reported_reason_code`.
 
----
+### 2. Micro-stops nobody logs
+
+A tray catches. A door needs reseating. Someone opens a damper. Thirty seconds to two minutes, constantly — and not one of them ever reaches a terminal. They are modelled as their own high-frequency process with their own reason code (`06`), and they are **never** logged.
+
+This is the harder pathology. The miscoding at least leaves a suspicious `Other` bucket behind. This one leaves nothing at all.
+
+### What that does to the numbers
+
+| Reason code | True share of lost time | As reported |
+|---|---|---|
+| **01 — Changeover** | **77.5%** | 53.1% |
+| **06 — Micro-stops** | **15.8%** | **0.0%** |
+| 02 — Mechanical | 3.2% | 3.3% |
+| 03 — Process / materials | 2.2% | 2.4% |
+| 04 — Personnel | 0.7% | 0.6% |
+| 05 — Quality stop | 0.7% | 0.6% |
+| **99 — "Other"** | **0.0%** | **40.0%** |
+
+The largest single bucket in the plant's own downtime report corresponds to **nothing that ever happened**, and the second-largest true cause of lost time is completely invisible — 168 hours of it, not one minute recorded.
+
+And it flatters Availability:
+
+| Machine | Availability from the operator log | Actual |
+|---|---|---|
+| Deck Oven Line | 0.817 | 0.780 |
+| Rack Oven Line | **0.757** | **0.534** |
+
+The rack reads twenty-two points better than it is. The asymmetry is mechanistic, not arbitrary: the rack runs short batches, so short unlogged stops eat a larger fraction of each one.
+
+### Why this belongs here
+
+The KPI views read **only** `reported_reason_code`, and **only** rows where `was_logged = TRUE` — because that is all a real analyst would ever have.
+
+`true_reason_code` and the unlogged rows exist for one purpose: the data-quality views measure the distortion instead of asserting it. They are the ruler, not the data. In a real plant `v_dq_reason_coding` cannot exist — there is one reason code and no record of what it should have been, which is precisely why the problem is invisible from inside real data.
+
+`v_dq_unaccounted_time` **can** be run in a real plant: machine counters against the operator log. That is the check that catches an Availability figure flattering the line.
+
+**This is a finding about data quality, not about bread.** Distrust the data first.
 
 ## Known limitations
 
@@ -148,7 +200,11 @@ This is a finding about **data quality**, not about bread. It violates no rule �
 
 **Machine age is the only causal channel from equipment to data.** Install year → base failure rate → downtime events → OEE Availability. There is no fabricated "condition score" doing invisible work.
 
-**No demand seasonality is *discovered*.** The demand tie makes the data plausible; it is never the insight. Injecting summer seasonality and then "finding" summer overproduction would be finding nothing but my own assumptions.
+**No demand seasonality is *discovered*.** Seasonality is not modelled — it is *inherited*, by reading the real daily series rather than fitting a curve. The demand tie makes the data plausible; it is never the insight.
+
+**The rack oven's low Availability is a consequence of my parameters, not a discovery.** It runs ten products in small batches with a changeover between each, and the changeover is sometimes longer than the run. That is a genuine phenomenon in a many-SKU line — but I chose the batch sizes and the changeover durations.
+
+**Actual times equal scheduled times.** A batch occupies its planned window and downtime is consumed inside it, rather than pushing everything downstream late. In a live plant a breakdown shifts the whole schedule. OEE is unaffected — Availability compares run time to planned time, both intact — but `actual_start_ts` and `actual_end_ts` carry no information they didn't already have.
 
 **Planned production time = scheduled batch time**, written explicitly by the generator — not shift length. Availability measures downtime against the plan, which is what it is for.
 
