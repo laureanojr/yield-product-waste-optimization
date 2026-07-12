@@ -1,0 +1,241 @@
+# =============================================================================
+# Synthetic manufacturing layer — generator configuration
+#
+# Every knob for the simulation lives here. The generator reads this file and
+# reads dim_product / dim_machine from BigQuery. It has no hidden constants.
+#
+# CORE PRINCIPLE: the generator writes RAW EVENTS ONLY — planned and actual
+# quantities, start times, run times, good and scrap units, downtime intervals,
+# inspection outcomes. It NEVER writes a yield %, a waste rate, or an OEE
+# number. Every KPI derives in SQL, and OEE must reconcile from
+# Availability x Performance x Quality.
+#
+# NO FINDINGS: this layer demonstrates method. Any pattern in the output is an
+# assumption in this file, read back. It is not a discovery about bakeries.
+# =============================================================================
+
+run:
+  # Fixed seed. The same seed must always produce the same dataset, or the
+  # repo is not reproducible.
+  random_seed: 42
+
+  # Full real span. Two summers gives plausibility, not a year-over-year
+  # finding — seasonality is injected, so it must never be "discovered".
+  start_date: "2021-01-01"
+  end_date:   "2022-09-30"
+
+
+plant:
+  # -- Calendar ---------------------------------------------------------------
+  # The plant runs Mon-Sat on its OWN schedule. It does not inherit the retail
+  # shop's Wednesday closure: a production bakery supplying ten outlets has no
+  # reason to share one shop's opening hours.
+  operating_days: [monday, tuesday, wednesday, thursday, friday, saturday]
+
+  # Production runs overnight into the morning, as bakeries do. A ten-hour night
+  # shift, not eight: the deck oven needs ~6 h of bake time at this scale, and
+  # the remaining 4 h carries changeovers and downtime. An 8-hour window would
+  # not fit the plant.
+  #
+  # Planned production time for OEE Availability is SCHEDULED BATCH TIME
+  # (written per batch by the generator), NOT this window. Availability measures
+  # downtime against the plan, which is what it is for.
+  shift_start: "02:00"
+  shift_end:   "12:00"
+
+  # -- Scale ------------------------------------------------------------------
+  # dim_product.v1_total_units is REFERENCE OUTLET DEMAND: one real retail shop,
+  # ~540 units/day across all 27 products. A single shop does not run an OEE
+  # programme. The plant supplies several outlets, so demand is scaled BEFORE
+  # production planning — never by multiplying generated data afterwards.
+  #
+  # The demand MIX and SEASONALITY come from the real dataset. Only the SCALE
+  # is fabricated.
+  #
+  # WHY 2, AND NOT 10.
+  # The factor is capacity-bound, not chosen for effect. A capacity check
+  # against the equipment basis gives deck-oven load per production day:
+  #
+  #     N = 1  ->  3.0 h deck,  0.2 h rack
+  #     N = 2  ->  6.0 h deck,  0.4 h rack     <- fits a 10 h shift with margin
+  #     N = 3  ->  9.0 h deck,  0.6 h rack
+  #     N = 10 -> 30.1 h deck,  1.9 h rack     <- impossible
+  #
+  # The deck oven IS the plant: bread is ~90% of volume, and a deck load is 90
+  # units against the rack's 288. At N = 2 the deck runs ~6 h of a 10 h shift —
+  # a real bottleneck with real margin, which is what makes downtime and scrap
+  # meaningful. Push N higher and the plant fails to bake its own demand EVERY
+  # DAY for 600 days, and OEE becomes noise about a facility that was never
+  # viable.
+  #
+  # A capacity violation here would NOT be a finding. I chose the factor and I
+  # chose the oven. "Discovering" the bottleneck would be arithmetic on my own
+  # assumptions, handed back to me.
+  outlet_equivalent_factor: 2
+
+
+batching:
+  # -- The load unit is the tray (or the deck), not the whole oven ------------
+  # A rack is a shared resource. No bakery bakes eighteen trays of nothing but
+  # eclairs. A batch occupies the trays it needs and consumes oven time in
+  # proportion:
+  #
+  #     run_time = (trays_used / trays_per_rack) x cycle_minutes
+  #
+  # Allocating a fraction of an oven cycle is a mild fiction — you cannot run an
+  # eighteenth of a rack. But it is the standard capacity-share allocation an
+  # MES uses for a resource shared across concurrent work orders. Without it,
+  # Performance measures how I chose to batch rather than how the process ran.
+  allocation: capacity_share
+
+  deck_oven:
+    decks_per_load: 3
+  rack_oven:
+    trays_per_rack: 18
+
+  # Minimum viable batch — a plant does not fire an oven for four croissants.
+  # Below this, demand accumulates to the next production day. Low-volume
+  # products (cookie, eclair, chausson) therefore run intermittently rather than
+  # daily, which is how a real bakery schedules them.
+  min_batch_trays: 1
+  min_batch_decks: 1
+
+  # -- Dispatch rule ----------------------------------------------------------
+  # Not an optimiser. The generator is producing plausible history, not solving
+  # a scheduling problem. Batches are sequenced by daily volume, largest first,
+  # with a changeover (Code 01) logged on every product switch. Baguettes go in
+  # first because that is how the shift actually runs: the volume driver leads,
+  # the specialty items follow.
+  #
+  # FIFO does not apply — there is no queue of arriving orders. The day's demand
+  # is known at the start of the day.
+  dispatch: volume_descending
+
+
+performance:
+  # Achieved rate as a fraction of dim_product.ideal_units_per_hr.
+  # MUST stay strictly below 1.0 or OEE Performance exceeds 100% and the
+  # decomposition stops reconciling. Asserted post-generation.
+  achieved_rate_fraction:
+    mean: 0.88
+    std:  0.05
+    min:  0.60
+    max:  0.97
+
+
+scrap:
+  # Total yield loss — units produced that never reach the shelf.
+  # Healthy semi-automated bakery line: 3-5%. Below 2% is world-class and rare.
+  # Above 7% is a fundamental problem. Baseline set mid-band.
+  #
+  # SIMPLIFICATION: the schema has one batch and no pre-bake stage, so
+  # dough/dividing scrap and bake scrap are not modelled separately. All scrap
+  # is valued at full standard cost — see docs/synthetic_layer_assumptions.md.
+  base_rate:
+    mean: 0.04
+    std:  0.015
+    min:  0.005
+    max:  0.12
+
+  # Hand-finished products carry more handling and therefore more loss.
+  category_multiplier:
+    bread:        1.0
+    viennoiserie: 1.2
+    patisserie:   1.4
+    sandwich:     0.8
+
+
+downtime:
+  # base_failure_rate_per_hr comes from dim_machine — read, not duplicated here.
+  # It is the ONLY causal channel from equipment to data:
+  #   install year -> base failure rate -> downtime events -> OEE Availability.
+
+  # -- Reason codes -----------------------------------------------------------
+  # Five codes. More than that and the data becomes noise on the terminal.
+  #
+  # IMPORTANT — CODE 01 IS NOT THE HANDLING ALLOWANCE.
+  # Routine load/unload is already inside the cycle time that sets the ideal
+  # rate (bake + 6 min on the deck, bake + 2 min on the rack). It is RUN TIME.
+  # Logging it as downtime too would penalise it twice — once in Performance,
+  # once in Availability. Code 01 is the changeover BETWEEN DIFFERENT PRODUCTS:
+  # cleaning down, changing oven parameters, swapping formats. A distinct event
+  # between batches, not inside them.
+  #
+  # IMPORTANT — CODE 05 IS NOT DOUBLE-COUNTING.
+  # A quality-triggered line stop produces two separate losses: the time the
+  # line was down (Availability) and the units binned (Quality). Different terms
+  # in the OEE product. Both are recorded. This is correct.
+  reason_codes:
+    # 16 bread products share one deck oven, so changeovers are frequent. Between
+    # bread types they are short — different dough on the same peel, no deep
+    # clean. Longer only when the oven temperature has to move.
+    "01":
+      label: "Changeover / SMED"
+      description: "Cleaning, retooling, parameter change, dead time between product runs"
+      weight: 0.30
+      duration_minutes: {mean: 9, std: 4, min: 3, max: 30}
+    "02":
+      label: "Mechanical / Technical"
+      description: "Oven faults, PLC errors, conveyor jams, hardware failure"
+      weight: 0.25
+      duration_minutes: {mean: 35, std: 20, min: 10, max: 180}
+    "03":
+      label: "Process / Materials"
+      description: "Dough temperature or hydration out of spec, proofing issues, supply shortage"
+      weight: 0.20
+      duration_minutes: {mean: 25, std: 12, min: 5, max: 90}
+    "04":
+      label: "Personnel"
+      description: "Staffing gap, manual intervention, training pause"
+      weight: 0.15
+      duration_minutes: {mean: 20, std: 10, min: 5, max: 60}
+    "05":
+      label: "Quality / Rejection"
+      description: "Product rejected during the run, requiring a line stop"
+      weight: 0.10
+      duration_minutes: {mean: 15, std: 8, min: 5, max: 45}
+
+
+  # -- THE MES PATHOLOGY (deliberate) -----------------------------------------
+  # Real production data is systematically wrong in a specific way, and this
+  # generator reproduces it on purpose.
+  #
+  # The terminal offers a list of reasons. "Other" is the fastest button. A
+  # meaningful share of events that were really changeovers or short stops end
+  # up there, because an operator with dough on their hands picks the quickest
+  # option, not the accurate one.
+  #
+  # The generator writes the TRUE reason to `true_reason_code`, then miscodes a
+  # share of them to `99 / OTHER` in `reported_reason_code`. The KPI views read
+  # ONLY the reported code — because that is all a real analyst would have.
+  # true_reason_code exists so the data-quality check can prove the distortion.
+  #
+  # WHY THIS BELONGS HERE: it demonstrates that I know where operational data
+  # goes wrong and check before trusting it. It is a finding about DATA QUALITY,
+  # not about bread — so it breaks no rule. Distrust the data first.
+  miscoding:
+    enabled: true
+    catchall_code: "99"
+    catchall_label: "Other"
+
+    # Short stops are miscoded far more often than long ones. Nobody fills in a
+    # form properly for a four-minute stop.
+    probability_by_duration:
+      under_10_min: 0.55
+      under_30_min: 0.30
+      over_30_min:  0.05
+
+    # Micro-stops below this threshold are never logged at all. This silently
+    # INFLATES Availability, which is the second half of the pathology and the
+    # harder one to spot.
+    unlogged_below_minutes: 3
+
+
+quality:
+  # fact_quality_inspection — sampled, not census. A real line inspects a
+  # fraction of batches, not every one.
+  inspection_rate: 0.25
+
+  # Inspection outcome correlates with the batch's actual scrap rate. It does
+  # not create the scrap; it observes it.
+  fail_threshold_scrap_rate: 0.07
