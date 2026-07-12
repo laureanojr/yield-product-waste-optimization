@@ -34,7 +34,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
-from google.cloud import bigquery
+
+# NOTE: google-cloud-bigquery is imported LAZILY, inside main(). The generator's
+# logic has no cloud dependency, and scripts/build_duckdb.py imports generate()
+# and validate() directly to run the whole pipeline locally. Importing BigQuery
+# at module level would force every user to install a cloud SDK they may never
+# call — which would defeat the point of the DuckDB path.
 
 PROJECT = "bakery-analytics-501220"
 LOCATION = "EU"
@@ -52,7 +57,7 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def load_dimensions(client: bigquery.Client) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_dimensions(client) -> tuple[pd.DataFrame, pd.DataFrame]:
     """dim_product and dim_machine. The generator holds NO hardcoded product or
     equipment data — everything comes from the dimensions, so the two cannot
     drift apart."""
@@ -74,7 +79,7 @@ def load_dimensions(client: bigquery.Client) -> tuple[pd.DataFrame, pd.DataFrame
     return products, machines
 
 
-def load_real_demand(client: bigquery.Client, products: pd.DataFrame) -> pd.DataFrame:
+def load_real_demand(client, products: pd.DataFrame) -> pd.DataFrame:
     """The real daily demand series, one row per product per trading day.
 
     Seasonality is NOT modelled. It is inherited. Fitting a sine wave to demand
@@ -488,6 +493,8 @@ def validate(batches: pd.DataFrame, downtimes: pd.DataFrame, products: pd.DataFr
 # =============================================================================
 
 def main():
+    from google.cloud import bigquery      # lazy: only the BigQuery path needs it
+
     cfg = load_config()
     client = bigquery.Client(project=PROJECT, location=LOCATION)
 

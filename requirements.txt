@@ -4,3 +4,4 @@ matplotlib
 plotly
 jupyterlab
 google-cloud-bigquery
+duckdb

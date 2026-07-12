@@ -10,3 +10,4 @@ data/cleaned/*
 !data/cleaned/.gitkeep
 *.env
 credentials.json
+bakery.duckdb
