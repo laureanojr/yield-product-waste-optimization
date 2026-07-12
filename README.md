@@ -56,7 +56,7 @@ A real point-of-sale export from a French bakery, January 2021 to September 2022
 
 ## The synthetic production layer
 
-Till data has no production in it, so I generated some — a five-table star schema with 8,770 batches, 16,029 downtime events and 2,166 quality inspections across the same 21 months of real demand.
+Till data has no production in it, so I generated some — a five-table star schema with 8,773 batches, 15,808 downtime events and 2,140 quality inspections across the same 21 months of real demand.
 
 The generator writes raw events only: quantities, run times, good and scrap units, downtime intervals. It never writes a yield %, a waste rate or an OEE number — everything derives in SQL. Production rates aren't hardcoded either; they come from six equipment numbers and a bake time per product, so changing an input recomputes every affected rate.
 
@@ -68,11 +68,13 @@ Real production data is wrong in specific ways, and I built two of them in on pu
 
 | Reason code | True share of lost time | As reported |
 |---|---|---|
-| Changeover | 77.5% | 53.1% |
-| Micro-stops | 15.8% | **0.0%** |
-| "Other" | **0.0%** | 40.0% |
+| Changeover | 77.9% | 52.1% |
+| Micro-stops | 15.5% | **0.0%** |
+| "Other" (the button) | — | **41.6%** |
 
-So the largest bucket in the plant's own downtime report corresponds to nothing that happened, and the second-largest true cause of lost time is invisible — 168 hours of it, unrecorded. A maintenance team prioritising off that Pareto fixes the wrong thing.
+The largest bucket in the plant's own downtime report is a button, not a cause. The second-largest true cause of lost time is invisible — 164 hours of it, unrecorded. A maintenance team prioritising off that Pareto fixes the wrong thing.
+
+Two things make it worse, and both are real. Operators type round numbers, so three quarters of the logged durations land on a multiple of five minutes while the machine counter almost never does. And part of that "Other" bucket is genuinely uncategorised rather than miscoded — you can't simply subtract it.
 
 Two data-quality views measure the gap. One of them (`v_dq_reason_coding`) couldn't exist in a real plant — you get one reason code and no record of what it should have been, which is exactly why the problem is invisible from inside real data. The other (`v_dq_unaccounted_time`) compares the machine counter against the operator log, and that check *is* runnable anywhere.
 
@@ -141,11 +143,11 @@ SELECT * FROM v_dq_unaccounted_time;
 
 For the real-layer analysis and charts, run the notebooks in order, 01 → 03.
 
-### Two engines, one answer
+### Two engines
 
-The pipeline was built on BigQuery, and those scripts are still here in [`sql/synthetic/`](sql/synthetic/). They ran, and they're the record of that work.
+The pipeline was built on BigQuery, and those scripts are still here in [`sql/synthetic/`](sql/synthetic/) — they ran, and they're the record of how it was built.
 
-But a repo that needs a Google Cloud account is a repo nobody actually runs, and reproducibility is a standard I set for this project. So the whole thing is ported to DuckDB — and the port cross-validates the original exactly: **8,770 batches, 16,029 downtime events, identical reason-code shares to four decimal places.** Two engines, different SQL dialects, the same answer.
+But a repo that needs a Google Cloud account is a repo nobody runs, so the whole thing is ported to DuckDB, and **DuckDB is canonical.** The BigQuery schema predates two later changes (operator-rounded durations, and the genuinely-uncategorised reason code), so it lags. Porting it back would need a cloud account to verify and would buy nothing, so I left it as the historical version rather than let the two silently drift apart.
 
 The dashboard is unaffected either way: Data Studio serves from an aggregated Sheet, so the live link keeps working regardless of what's running underneath.
 

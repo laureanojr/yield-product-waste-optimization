@@ -249,7 +249,12 @@ CREATE OR REPLACE TABLE fact_downtime (
   production_date       DATE      NOT NULL,
   start_ts              TIMESTAMP NOT NULL,
   end_ts                TIMESTAMP NOT NULL,
-  duration_minutes      DOUBLE    NOT NULL,
+  -- What the machine's counter says.
+  duration_minutes           DOUBLE NOT NULL,
+  -- What went on the form. Operators type round numbers — real downtime logs
+  -- heap on 5, 10, 15, 30 minutes. Nobody enters "11.97". This is the column an
+  -- analyst actually has.
+  reported_duration_minutes  DOUBLE NOT NULL,
   -- What the operator pressed. The only code a real analyst has.
   reported_reason_code  VARCHAR   NOT NULL,
   reported_reason_label VARCHAR   NOT NULL,

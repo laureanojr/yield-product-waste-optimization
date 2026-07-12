@@ -8,9 +8,11 @@ CREATE OR REPLACE VIEW v_batch_oee AS
 WITH logged_stops AS (
   -- was_logged only: micro-stops never reach a terminal, so an analyst working
   -- from the operator log can't see them either.
+  -- reported_duration_minutes, not duration_minutes: this is what the operator
+  -- put on the form, and it's all an analyst would have.
   SELECT batch_id,
-         SUM(duration_minutes) AS logged_stop_minutes,
-         COUNT(*)              AS logged_stop_events
+         SUM(reported_duration_minutes) AS logged_stop_minutes,
+         COUNT(*)                       AS logged_stop_events
   FROM fact_downtime
   WHERE was_logged
   GROUP BY batch_id
@@ -106,11 +108,11 @@ SELECT
   m.machine_name,
   d.reported_reason_code  AS reason_code,
   d.reported_reason_label AS reason_label,
-  COUNT(*)                                 AS events,
-  ROUND(SUM(d.duration_minutes) / 60.0, 2) AS stop_hours,
-  ROUND(SUM(d.duration_minutes)
-        / SUM(SUM(d.duration_minutes)) OVER (PARTITION BY d.machine_id), 4)
-                                           AS share_of_machine_stop_time
+  COUNT(*)                                          AS events,
+  ROUND(SUM(d.reported_duration_minutes) / 60.0, 2) AS stop_hours,
+  ROUND(SUM(d.reported_duration_minutes)
+        / SUM(SUM(d.reported_duration_minutes)) OVER (PARTITION BY d.machine_id), 4)
+                                                    AS share_of_machine_stop_time
 FROM fact_downtime d
 JOIN dim_machine m USING (machine_id)
 WHERE d.was_logged
@@ -119,14 +121,16 @@ GROUP BY d.machine_id, m.machine_name, d.reported_reason_code, d.reported_reason
 
 -- Reported reason codes against what actually caused each stop.
 --
--- This view can't be built in a real plant: there is one reason code and no
--- record of what it should have been. It works here only because the data is
--- synthetic. The distortion it measures is real in its effect though —
--- v_downtime_pareto reads the same reported codes, so the Pareto a maintenance
--- team would prioritise off is genuinely misleading.
+-- Can't be built in a real plant: there's one reason code and no record of what
+-- it should have been. Works here only because the data is synthetic.
+--
+-- Note code 98 — genuinely uncategorised stops. They report as "Other" because
+-- Other is the honest answer. So the catch-all bucket is part real and part
+-- miscoding, which is the actual problem: you can't just subtract it.
 CREATE OR REPLACE VIEW v_dq_reason_coding AS
 WITH reported AS (
-  SELECT reported_reason_code AS code, SUM(duration_minutes) AS reported_minutes
+  SELECT reported_reason_code AS code,
+         SUM(reported_duration_minutes) AS reported_minutes
   FROM fact_downtime WHERE was_logged
   GROUP BY code
 ),

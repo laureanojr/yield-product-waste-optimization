@@ -124,13 +124,17 @@ performance:
 
 
 scrap:
-  # Total yield loss — units produced that never reach the shelf.
-  # Healthy semi-automated bakery line: 3-5%. Below 2% is world-class and rare.
-  # Above 7% is a fundamental problem. Baseline set mid-band.
+  # FINISHED-UNIT REJECT RATE. Not "scrap" in general — the word means too many
+  # different things in a bakery to leave undefined.
   #
-  # SIMPLIFICATION: the schema has one batch and no pre-bake stage, so
-  # dough/dividing scrap and bake scrap are not modelled separately. All scrap
-  # is valued at full standard cost — see docs/synthetic_layer_assumptions.md.
+  # This is: finished units rejected at or after the bake. It EXCLUDES dough loss
+  # at dividing, rework, trim, giveaway/overweight, packaging waste, and retail
+  # overproduction. The real layer's waste is that last one, and it is a
+  # different quantity entirely — the two share a project title, not a
+  # definition.
+  #
+  # 3-5% is a plausible band for finished-unit rejection on a semi-automated
+  # bakery line. It is an assumption, not a sourced benchmark.
   base_rate:
     mean: 0.04
     std:  0.015
@@ -143,6 +147,15 @@ scrap:
     viennoiserie: 1.2
     patisserie:   1.4
     sandwich:     0.8
+
+  # -- SCRAP AND DOWNTIME CO-MOVE ---------------------------------------------
+  # A stop doesn't just cost time. The oven cools, the proof runs on, and the
+  # first units after a restart come out wrong. In a plant, downtime and scrap
+  # move together; modelling them independently is a white-collar mistake.
+  #
+  # Extra reject rate per logged stop in the batch. A batch that stopped five
+  # times scraps more than one that ran clean, even at the same total downtime.
+  per_stop_penalty: 0.012
 
 
 downtime:
@@ -166,18 +179,29 @@ downtime:
   # line was down (Availability) and the units binned (Quality). Different terms
   # in the OEE product. Both are recorded. This is correct.
   reason_codes:
-    # 16 bread products share one deck oven, so changeovers are frequent. Between
-    # bread types they are short — different dough on the same peel, no deep
-    # clean. Longer only when the oven temperature has to move.
+    # NO WEIGHT ON 01. Changeover is deterministic — one per product switch —
+    # so it is never sampled from the failure draw. The other codes' weights are
+    # renormalised over 02-05. An earlier version of this file carried
+    # `weight: 0.30` here, which was never read and misdescribed the model:
+    # changeover is ~77% of actual downtime, not 30%.
+    #
+    # 16 bread products share one deck oven, so switches are frequent. Between
+    # bread types the changeover is short — different dough, same peel, no deep
+    # clean.
+    #
+    # NOT MODELLED: duration is drawn from one distribution regardless of which
+    # product follows which. A real bakery's changeover is sequence-dependent —
+    # a temperature-family change (pastry to bread) or an allergen change costs
+    # far more than baguette to ficelle. A transition matrix would be the right
+    # fix and is out of scope here.
     "01":
       label: "Changeover / SMED"
       description: "Cleaning, retooling, parameter change, dead time between product runs"
-      weight: 0.30
       duration_minutes: {mean: 9, std: 4, min: 3, max: 30}
     "02":
       label: "Mechanical / Technical"
       description: "Oven faults, PLC errors, conveyor jams, hardware failure"
-      weight: 0.25
+      weight: 0.35
       duration_minutes: {mean: 35, std: 20, min: 10, max: 180}
     "03":
       label: "Process / Materials"
@@ -194,6 +218,21 @@ downtime:
       description: "Product rejected during the run, requiring a line stop"
       weight: 0.10
       duration_minutes: {mean: 15, std: 8, min: 5, max: 45}
+
+    # Some stops genuinely don't fit the taxonomy: novel failures, incomplete
+    # investigations, causes nobody got to the bottom of. An earlier version of
+    # this model asserted that NOTHING was ever truly "Other" — which is the
+    # fantasy, not the pathology. A real plant's job is to keep this bucket small
+    # and reviewed, not to pretend it can't exist.
+    #
+    # This matters for the demonstration too: it means the catch-all bucket is
+    # part real and part miscoding, which is the actual situation an analyst
+    # faces. You can't just subtract it.
+    "98":
+      label: "Uncategorised"
+      description: "Genuinely does not fit the taxonomy — novel failure, or nobody investigated"
+      weight: 0.05
+      duration_minutes: {mean: 20, std: 12, min: 5, max: 60}
 
 
   # -- THE MES PATHOLOGY (deliberate) -----------------------------------------
@@ -258,6 +297,22 @@ downtime:
 
   # Below this, a stop never makes it onto the terminal at all.
   unlogged_below_minutes: 3
+
+  # -- DURATION HEAPING -------------------------------------------------------
+  # Operators type round numbers. Real downtime logs pile up hard on 5, 10, 15,
+  # 30 minutes — nobody enters "6.95". Machine-detected durations are exact;
+  # operator-entered ones are not.
+  #
+  # Without this, a logged duration of 11.97 minutes is the fastest possible tell
+  # that the data is generated. Anyone who has opened a real MES export spots it
+  # immediately.
+  #
+  # true duration is preserved on the row; only the REPORTED duration is rounded,
+  # which is also what happens in a plant: the machine knows, the form doesn't.
+  operator_rounding:
+    enabled: true
+    to_nearest_minutes: 5
+    probability: 0.75          # not everyone rounds, and not every time
 
 quality:
   # fact_quality_inspection — sampled, not census. A real line inspects a

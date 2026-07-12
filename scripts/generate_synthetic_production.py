@@ -171,6 +171,10 @@ class Reasons:
         if micro.get("enabled"):
             labels[micro["true_reason_code"]] = micro["true_reason_label"]
 
+        # 01 is deterministic (one per product switch), so it's never drawn.
+        # Everything else is, including 98 — some stops genuinely don't fit the
+        # taxonomy, and a model where nothing is ever truly "Other" is the
+        # fantasy, not the pathology.
         failure_codes = [k for k in rc if k != "01"]
         w = np.array([rc[k]["weight"] for k in failure_codes], dtype=float)
         return cls(
@@ -206,6 +210,8 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
 
     mis = cfg["downtime"]["miscoding"]
     unlogged_below = cfg["downtime"]["unlogged_below_minutes"]
+    rounding = cfg["downtime"].get("operator_rounding", {})
+    per_stop_penalty = cfg["scrap"].get("per_stop_penalty", 0.0)
     perf_spec = cfg["performance"]["achieved_rate_fraction"]
     scrap_spec = cfg["scrap"]["base_rate"]
     scrap_mult = cfg["scrap"]["category_multiplier"]
@@ -330,7 +336,13 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
             if total_units < 1:
                 continue
 
+            # A stop doesn't just cost time — the oven cools, the proof runs on,
+            # and the first units after a restart come out wrong. Downtime and
+            # scrap co-move in a plant; modelling them independently is a
+            # white-collar mistake.
+            n_stops = sum(1 for _, d in batch_downtime if d >= unlogged_below)
             sr = draw_truncated(rng, scrap_spec) * scrap_mult[p["product_category"]]
+            sr += n_stops * per_stop_penalty
             sr = min(sr, 0.30)
             scrap_units = int(round(total_units * sr))
             good_units = total_units - scrap_units
@@ -378,12 +390,25 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                 else:
                     p_mis = mis["probability_by_duration"]["over_30_min"]
 
-                if mis["enabled"] and was_logged and rng.random() < p_mis:
-                    rep_code = mis["catchall_code"]
-                    rep_label = mis["catchall_label"]
+                if true_code == "98":
+                    # Genuinely uncategorised. The operator presses Other because
+                    # Other is the honest answer. This is why an analyst can't
+                    # just subtract the catch-all bucket: some of it is real.
+                    rep_code, rep_label = mis["catchall_code"], mis["catchall_label"]
+                elif mis["enabled"] and was_logged and rng.random() < p_mis:
+                    rep_code, rep_label = mis["catchall_code"], mis["catchall_label"]
                 else:
-                    rep_code = true_code
-                    rep_label = reasons.labels[true_code]
+                    rep_code, rep_label = true_code, reasons.labels[true_code]
+
+                # Operators type round numbers. A logged duration of 11.97
+                # minutes is the fastest possible tell that data is generated —
+                # real MES exports heap hard on 5, 10, 15, 30. The machine knows
+                # the exact figure; the form doesn't.
+                rep_dur = dur
+                if was_logged and rounding.get("enabled") \
+                        and rng.random() < rounding["probability"]:
+                    step = rounding["to_nearest_minutes"]
+                    rep_dur = max(step, round(dur / step) * step)
 
                 downtimes.append(dict(
                     downtime_id=f"D{bid[1:]}-{i}",
@@ -393,6 +418,7 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
                     start_ts=ds,
                     end_ts=de,
                     duration_minutes=round(dur, 2),
+                    reported_duration_minutes=round(rep_dur, 2),
                     reported_reason_code=rep_code,
                     reported_reason_label=rep_label,
                     true_reason_code=true_code,

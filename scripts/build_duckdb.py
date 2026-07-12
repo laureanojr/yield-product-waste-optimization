@@ -107,12 +107,20 @@ CHECKS = [
 # still being injected. If someone removes them, the data-quality views quietly
 # become a demonstration of nothing, and these are what tells you.
 GENERATOR_CONTRACT = [
-    ("code 99 is only ever a reporting artefact, never a true cause",
+    # 99 is the button, not a cause. Nothing is ever truly "code 99".
+    ("code 99 is a reported code only, never a true cause",
      "SELECT COUNT(*) FROM fact_downtime "
      "WHERE reported_reason_code = '99' AND true_reason_code = '99'"),
 
     ("no micro-stop was ever logged",
      "SELECT COUNT(*) FROM fact_downtime WHERE true_reason_code = '06' AND was_logged"),
+
+    # But SOME stops are genuinely uncategorised (98), and they report as Other
+    # honestly. A plant where nothing is ever truly "Other" is the fantasy. This
+    # is why the catch-all can't just be subtracted.
+    ("some Other is genuine — code 98 exists and reports as 99",
+     "SELECT CASE WHEN COUNT(*) > 0 THEN 0 ELSE 1 END FROM fact_downtime "
+     "WHERE true_reason_code = '98' AND reported_reason_code = '99'"),
 ]
 
 
@@ -154,6 +162,16 @@ def main() -> None:
 
     print("Creating KPI views...")
     con.execute((SQL / "duckdb_views.sql").read_text())
+
+    # Write the CSVs too. They aren't needed to run anything — DuckDB builds
+    # straight from the generator — but someone browsing the repo should be able
+    # to see the data without running it, and if they're written here they can't
+    # drift from the code that made them.
+    out = ROOT / "data" / "synthetic"
+    out.mkdir(parents=True, exist_ok=True)
+    batches.to_csv(out / "fact_production_batch.csv", index=False)
+    downtimes.to_csv(out / "fact_downtime.csv", index=False)
+    inspections.to_csv(out / "fact_quality_inspection.csv", index=False)
 
     failed = 0
 
