@@ -69,6 +69,17 @@
 ALTER TABLE `bakery_synthetic.dim_product`
   ADD COLUMN IF NOT EXISTS machine_id INT64;
 
+-- The generator needs batch size and process time to size a batch and compute
+-- its cycle. They belong here, on the product master — a real ERP product
+-- master carries standard batch size and standard process time. Keeping them in
+-- the table (rather than only in this script) means the generator holds NO
+-- hardcoded product data and cannot drift from the dimension.
+ALTER TABLE `bakery_synthetic.dim_product`
+  ADD COLUMN IF NOT EXISTS units_per_full_load INT64;
+
+ALTER TABLE `bakery_synthetic.dim_product`
+  ADD COLUMN IF NOT EXISTS bake_minutes FLOAT64;
+
 BEGIN TRANSACTION;
 
 MERGE `bakery_synthetic.dim_product` AS target
@@ -160,6 +171,8 @@ USING (
     SELECT
       d.product_name,
       o.machine_id,
+      o.units_per_full_load,
+      o.bake_minutes,
 
       -- full standard cost = real median price x fabricated category ratio
       CAST(
@@ -196,9 +209,11 @@ USING (
 ) AS source
 ON target.product_name = source.product_name
 WHEN MATCHED THEN UPDATE SET
-  machine_id         = source.machine_id,
-  unit_cost_eur      = source.unit_cost_eur,
-  ideal_units_per_hr = source.ideal_units_per_hr;
+  machine_id          = source.machine_id,
+  units_per_full_load = source.units_per_full_load,
+  bake_minutes        = source.bake_minutes,
+  unit_cost_eur       = source.unit_cost_eur,
+  ideal_units_per_hr  = source.ideal_units_per_hr;
 
 -- -----------------------------------------------------------------------------
 -- Validation — fail loudly, roll back on failure
@@ -235,6 +250,29 @@ ASSERT (
 ) = 1
   AS 'Validation failed: the assembly bench must carry exactly one product.';
 
+-- Every baked product must carry a load size and a bake time, or the generator
+-- cannot size its batches. The assembly bench is the only permitted exception.
+ASSERT (
+  SELECT COUNT(*) FROM `bakery_synthetic.dim_product`
+  WHERE process_type = 'baked'
+    AND (units_per_full_load IS NULL OR bake_minutes IS NULL)
+) = 0
+  AS 'Validation failed: every baked product needs units_per_full_load and bake_minutes.';
+
+-- The rate on the table must equal the rate its own inputs imply. If this ever
+-- fails, someone has hand-edited a rate instead of changing an input.
+ASSERT (
+  SELECT COUNT(*)
+  FROM `bakery_synthetic.dim_product` p
+  JOIN `bakery_synthetic.dim_machine` m USING (machine_id)
+  WHERE p.process_type = 'baked'
+    AND ABS(
+          p.ideal_units_per_hr
+          - ROUND(p.units_per_full_load * (60.0 / (p.bake_minutes + m.handling_minutes)), 2)
+        ) > 0.01
+) = 0
+  AS 'Validation failed: ideal_units_per_hr does not reconcile with its own load and cycle inputs.';
+
 -- The rack oven must out-produce the deck oven per hour: 18 trays and a
 -- 2-minute trolley swap against 3 decks and a 6-minute manual reload. If this
 -- ever inverts, the handling model has been mis-entered.
@@ -256,6 +294,9 @@ SELECT
   p.product_category,
   p.process_type,
   m.machine_name,
+  p.units_per_full_load,
+  p.bake_minutes,
+  m.handling_minutes,
   p.unit_cost_eur,
   p.ideal_units_per_hr,
   p.v1_total_units
