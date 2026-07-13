@@ -105,7 +105,7 @@ The full write-up of every step and the reasoning behind it is in [`docs/build_g
 ├── config/          generator configuration — every fabricated number in one file
 ├── scripts/         generator + DuckDB build (build_duckdb.py runs everything)
 ├── sql/
-│   ├── synthetic/   BigQuery: schema, KPI views, 15-assertion validation
+│   ├── synthetic/   BigQuery: schema, KPI views, assertion suite
 │   └── duckdb/      the same layer, portable — no cloud account required
 ├── dashboard/       dashboard screenshots + SQL proof
 ├── images/charts/   analysis charts
@@ -129,6 +129,8 @@ python scripts/build_duckdb.py
 ```
 
 That reads the cleaned POS export, generates the synthetic production layer from a fixed seed, creates every KPI view, and runs the checks. A few seconds, no credentials.
+
+CI runs exactly this on every push, so the figures below can't quietly drift from what the code produces. That's happened once already, and the check exists because of it.
 
 Then poke at it:
 

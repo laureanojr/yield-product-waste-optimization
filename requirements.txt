@@ -1,7 +1,16 @@
-pandas
-numpy
-matplotlib
-plotly
-jupyterlab
-google-cloud-bigquery
-duckdb
+# Pinned. An unpinned requirements file is a repo that works today and breaks in
+# six months, which is roughly when someone might actually look at it.
+pandas==2.2.3
+numpy==2.1.3
+duckdb==1.1.3
+pyyaml==6.0.2
+
+# Real-layer analysis (notebooks 01-03)
+matplotlib==3.9.2
+plotly==5.24.1
+jupyterlab==4.3.4
+
+# Only needed for the original BigQuery path in sql/synthetic/. The DuckDB build
+# imports it lazily and never calls it, so this is optional — install it only if
+# you want to run against BigQuery.
+# google-cloud-bigquery==3.27.0
