@@ -1,0 +1,67 @@
+name: build
+
+# Runs the whole pipeline on every push. If the numbers in the docs ever drift
+# from what the code produces, this fails — which is the point. The README is a
+# claim; this is the check.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Everything: real layer -> dimensions -> generate -> KPI views -> checks.
+      # Exits non-zero if any assertion fails.
+      - name: Build and validate
+        run: python scripts/build_duckdb.py
+
+      # Fixed seed, so the output is exact. If a config change moves these
+      # numbers, CI fails and the docs get updated in the same commit — instead
+      # of drifting quietly, which is what happened before this job existed.
+      - name: Row counts match the documented figures
+        run: |
+          python - <<'PY'
+          import sys, duckdb
+
+          EXPECTED = {
+              "fact_production_batch":   8773,
+              "fact_downtime":          15808,
+              "fact_quality_inspection": 2140,
+          }
+
+          con = duckdb.connect("bakery.duckdb", read_only=True)
+          bad = 0
+          for table, want in EXPECTED.items():
+              got = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+              ok = got == want
+              bad += not ok
+              print(f"{'ok  ' if ok else 'FAIL'} {table:<26} {got:>6,}  (expected {want:,})")
+
+          # The pathology has to still be there, or the data-quality views are a
+          # demonstration of nothing.
+          other = con.execute("""
+              SELECT SUM(CASE WHEN reported_reason_code = '99'
+                              THEN reported_duration_minutes END)
+                   / SUM(reported_duration_minutes)
+              FROM fact_downtime WHERE was_logged
+          """).fetchone()[0]
+          print(f"     'Other' share of reported downtime: {other:.1%}")
+
+          if bad:
+              print("\nRow counts moved. Either a change was unintentional, or the "
+                    "docs need updating in this same commit.")
+              sys.exit(1)
+          PY
