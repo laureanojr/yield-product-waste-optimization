@@ -240,7 +240,18 @@ def generate(cfg: dict, products: pd.DataFrame, machines: pd.DataFrame,
         # Volume descending. Not an optimiser — this is plausible history, not a
         # scheduling problem. The volume driver leads and the specialty items
         # follow, which is how a shift actually runs.
-        day = day.sort_values("units", ascending=False)
+        # Sort on product_name as a tiebreaker, and use a STABLE sort.
+        #
+        # pandas defaults to quicksort, which isn't stable — so when two products
+        # have identical demand, the order is arbitrary. numpy's sort is
+        # SIMD-accelerated and breaks those ties differently on ARM than on x86,
+        # which meant this pipeline produced different output on a Mac than on a
+        # Linux CI runner. Same seed, same code, different numbers.
+        #
+        # CI caught it. Nothing else had, including me.
+        day = day.sort_values(
+            ["units", "product_name"], ascending=[False, True], kind="stable"
+        )
 
         # Each machine has its own clock. Deck, rack and bench run in parallel.
         elapsed = {m: 0.0 for m in mach}

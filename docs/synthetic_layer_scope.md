@@ -46,14 +46,14 @@ The result:
 
 | Reason code | True share of lost time | As reported |
 |---|---|---|
-| 01 — Changeover | 77.9% | 52.1% |
-| 06 — Micro-stops | 15.5% | **0.0%** |
-| 02 — Mechanical | 3.1% | 3.4% |
-| 03 — Process / materials | 1.8% | 1.6% |
-| 04 — Personnel | 0.8% | 0.8% |
-| 05 — Quality stop | 0.5% | 0.5% |
-| 98 — Genuinely uncategorised | 0.4% | — |
-| 99 — "Other" (the button) | — | **41.6%** |
+| 01 — Changeover | 77.6% | 52.5% |
+| 06 — Micro-stops | 15.7% | **0.0%** |
+| 02 — Mechanical | 3.3% | 3.4% |
+| 03 — Process / materials | 1.8% | 1.8% |
+| 04 — Personnel | 0.7% | 0.7% |
+| 05 — Quality stop | 0.6% | 0.6% |
+| 98 — Genuinely uncategorised | 0.3% | — |
+| 99 — "Other" (the button) | — | **41.0%** |
 
 The largest bucket in the plant's downtime report is a button, not a cause. The second-largest true cause of lost time is invisible.
 
@@ -105,7 +105,11 @@ Scrap is valued at full standard cost regardless of when it was rejected; real p
 
 ## Reproducing it
 
-Fixed seed. Same inputs, same output.
+Fixed seed. Same inputs, same output — on any machine, which took a CI job to make true.
+
+The first CI run failed. The pipeline was sorting the day's batches by volume with pandas' default quicksort, which isn't stable, so products with identical demand got ordered arbitrarily — and numpy's SIMD sort breaks those ties differently on ARM than on x86. The generator produced different output on a Mac than on a Linux runner. Same seed, same code, different numbers. Three reviewers and I had all missed it; the CI caught it in forty-five seconds. Sorting on an explicit tiebreaker with a stable sort fixed it.
+
+CI now runs the whole build on every push and asserts the row counts, so the figures in this document can't drift from what the code produces.
 
 ```bash
 pip install -r requirements.txt
@@ -114,4 +118,4 @@ python scripts/build_duckdb.py
 
 Built originally on BigQuery. Those scripts are in `sql/synthetic/` and they are the record of how it was built, but **DuckDB is now canonical** — the BigQuery schema predates `reported_duration_minutes` and reason code 98, so it lags. Porting it back would cost a cloud account to verify and buy nothing, so I left it as the historical version and said so rather than quietly letting the two drift.
 
-8,773 batches, 15,808 downtime events, 2,140 inspections, across 21 months of real demand.
+8,773 batches, 15,862 downtime events, 2,198 inspections, across 21 months of real demand.

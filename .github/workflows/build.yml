@@ -38,8 +38,8 @@ jobs:
 
           EXPECTED = {
               "fact_production_batch":   8773,
-              "fact_downtime":          15808,
-              "fact_quality_inspection": 2140,
+              "fact_downtime":          15862,
+              "fact_quality_inspection": 2198,
           }
 
           con = duckdb.connect("bakery.duckdb", read_only=True)

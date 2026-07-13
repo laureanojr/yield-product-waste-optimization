@@ -56,7 +56,7 @@ A real point-of-sale export from a French bakery, January 2021 to September 2022
 
 ## The synthetic production layer
 
-Till data has no production in it, so I generated some — a five-table star schema with 8,773 batches, 15,808 downtime events and 2,140 quality inspections across the same 21 months of real demand.
+Till data has no production in it, so I generated some — a five-table star schema with 8,773 batches, 15,862 downtime events and 2,198 quality inspections across the same 21 months of real demand.
 
 The generator writes raw events only: quantities, run times, good and scrap units, downtime intervals. It never writes a yield %, a waste rate or an OEE number — everything derives in SQL. Production rates aren't hardcoded either; they come from six equipment numbers and a bake time per product, so changing an input recomputes every affected rate.
 
@@ -68,11 +68,11 @@ Real production data is wrong in specific ways, and I built two of them in on pu
 
 | Reason code | True share of lost time | As reported |
 |---|---|---|
-| Changeover | 77.9% | 52.1% |
-| Micro-stops | 15.5% | **0.0%** |
-| "Other" (the button) | — | **41.6%** |
+| Changeover | 77.6% | 52.5% |
+| Micro-stops | 15.7% | **0.0%** |
+| "Other" (the button) | — | **41.0%** |
 
-The largest bucket in the plant's own downtime report is a button, not a cause. The second-largest true cause of lost time is invisible — 164 hours of it, unrecorded. A maintenance team prioritising off that Pareto fixes the wrong thing.
+The largest bucket in the plant's own downtime report is a button, not a cause. The second-largest true cause of lost time is invisible — 166 hours of it, unrecorded. A maintenance team prioritising off that Pareto fixes the wrong thing.
 
 Two things make it worse, and both are real. Operators type round numbers, so three quarters of the logged durations land on a multiple of five minutes while the machine counter almost never does. And part of that "Other" bucket is genuinely uncategorised rather than miscoded — you can't simply subtract it.
 
@@ -130,7 +130,9 @@ python scripts/build_duckdb.py
 
 That reads the cleaned POS export, generates the synthetic production layer from a fixed seed, creates every KPI view, and runs the checks. A few seconds, no credentials.
 
-CI runs exactly this on every push, so the figures below can't quietly drift from what the code produces. That's happened once already, and the check exists because of it.
+CI runs exactly this on every push and asserts the row counts, so the figures below can't drift from what the code produces.
+
+Its first run failed, and found something nobody else had: the generator wasn't actually deterministic across machines. It sorted each day's batches with pandas' default quicksort — which isn't stable — so products with equal demand got ordered arbitrarily, and numpy's SIMD sort breaks those ties differently on ARM than on x86. Same seed, same code, different numbers on a Mac than on a Linux runner. Fixed with a stable sort and an explicit tiebreaker.
 
 Then poke at it:
 
