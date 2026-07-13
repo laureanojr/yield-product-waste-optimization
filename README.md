@@ -117,7 +117,7 @@ The full write-up of every step and the reasoning behind it is in [`docs/build_g
 
 ## Reproduce it
 
-**No cloud account needed.** Clone, install, run — the whole thing, on a laptop, in seconds.
+No cloud account needed. Clone, install, run.
 
 ```bash
 git clone https://github.com/laureanojr/yield-product-waste-optimization.git
@@ -128,9 +128,9 @@ pip install -r requirements.txt
 python scripts/build_duckdb.py
 ```
 
-That builds the real layer from the cleaned POS export, generates the synthetic production layer from a fixed seed, creates every KPI view, and runs 16 assertions — including that OEE reconciles from Availability × Performance × Quality.
+That reads the cleaned POS export, generates the synthetic production layer from a fixed seed, creates every KPI view, and runs the checks. A few seconds, no credentials.
 
-Then explore it:
+Then poke at it:
 
 ```bash
 duckdb bakery.duckdb
@@ -139,9 +139,14 @@ duckdb bakery.duckdb
 ```sql
 SELECT * FROM v_dq_reason_coding ORDER BY true_stop_hours DESC;
 SELECT * FROM v_dq_unaccounted_time;
+
+-- the tell: operators type round numbers
+SELECT reported_duration_minutes, COUNT(*)
+FROM fact_downtime WHERE was_logged
+GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
 ```
 
-For the real-layer analysis and charts, run the notebooks in order, 01 → 03.
+The cleaned CSV is committed so the build runs on a fresh clone. If you want to see it produced from the raw export instead, run the notebooks in order, 01 → 03 — that's also where the real-layer analysis and the charts live.
 
 ### Two engines
 

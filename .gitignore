@@ -8,6 +8,7 @@ data/processed/*
 data/cleaned/*
 !data/processed/.gitkeep
 !data/cleaned/.gitkeep
+!data/cleaned/bakery_sales_clean.csv
 *.env
 credentials.json
 bakery.duckdb
